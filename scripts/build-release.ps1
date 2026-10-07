@@ -1,0 +1,52 @@
+param([ValidateSet('all', 'installer', 'portable')][string]$Mode = 'all')
+$ErrorActionPreference = 'Stop'
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$config = Get-Content -LiteralPath (Join-Path $projectRoot 'src-tauri\tauri.conf.json') -Raw | ConvertFrom-Json
+$version = $config.version
+$target = 'x86_64-pc-windows-msvc'
+$targetDir = Join-Path $projectRoot 'src-tauri\target'
+$binaryDir = Join-Path $targetDir "$target\release"
+$outputDir = Join-Path $projectRoot "release\$version-windows-x64"
+$previousTargetDir = $env:CARGO_TARGET_DIR
+Push-Location $projectRoot
+try {
+    & node (Join-Path $PSScriptRoot 'check-release.cjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Release configuration validation failed.' }
+    $env:CARGO_TARGET_DIR = $targetDir
+    $buildArgs = @('run', 'tauri', '--', 'build', '--target', $target)
+    if ($Mode -eq 'portable') { $buildArgs += '--no-bundle' }
+    else { $buildArgs += @('--bundles', 'nsis') }
+    $buildArgs += @('--', '--locked')
+    & npm.cmd @buildArgs
+    if ($LASTEXITCODE -ne 0) { throw "Production build failed (exit code $LASTEXITCODE). No release files were published." }
+
+    $portableSource = Join-Path $binaryDir 'filemelon.exe'
+    $installerSources = @()
+    if ($Mode -ne 'portable') {
+        $installerSources = @(Get-ChildItem -LiteralPath (Join-Path $binaryDir 'bundle\nsis') -File | Where-Object { $_.Name -like "filemelon_${version}_*-setup.exe" })
+        if ($installerSources.Count -ne 1) { throw 'Expected exactly one matching NSIS installer.' }
+    }
+    if ($Mode -ne 'installer' -and -not (Test-Path -LiteralPath $portableSource -PathType Leaf)) { throw 'Portable executable is missing.' }
+
+    New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+    if ($Mode -ne 'portable') {
+        $installerOutput = Join-Path $outputDir "Filemelon-$version-windows-x64-setup.exe"
+        Copy-Item -LiteralPath $installerSources[0].FullName -Destination $installerOutput -Force
+        Write-Host "Installer: $installerOutput"
+    }
+    if ($Mode -ne 'installer') {
+        $portableOutput = Join-Path $outputDir "Filemelon-$version-windows-x64-portable.exe"
+        Copy-Item -LiteralPath $portableSource -Destination $portableOutput -Force
+        Write-Host "Portable: $portableOutput"
+        Write-Host 'Portable requires installed WebView2. Rules and logs remain in AppData.'
+    }
+    $checksums = Get-ChildItem -LiteralPath $outputDir -File -Filter '*.exe' | Sort-Object Name | ForEach-Object {
+        $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        "$hash  $($_.Name)"
+    }
+    $checksums | Set-Content -LiteralPath (Join-Path $outputDir 'SHA256SUMS.txt') -Encoding ascii
+} finally {
+    $env:CARGO_TARGET_DIR = $previousTargetDir
+    Pop-Location
+}
+

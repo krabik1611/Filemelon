@@ -1,0 +1,19 @@
+# Dependencies and generated output
+/node_modules/
+/.angular/
+/.npm-cache/
+/dist/
+/out-tsc/
+/release/
+/src-tauri/target/
+/src-tauri/gen/
+/work/
+/coverage/
+npm-debug.log*
+
+# Editor and operating-system files
+/.idea/
+/.vscode/
+.DS_Store
+Thumbs.db
+*.log

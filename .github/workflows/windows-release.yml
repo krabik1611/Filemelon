@@ -1,0 +1,104 @@
+name: Windows build and release
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+jobs:
+  build:
+    name: Check and build Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Validate release version
+        run: |
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            node scripts/check-release.cjs $env:GITHUB_REF_NAME
+          } else {
+            node scripts/check-release.cjs
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-x64-rust-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: windows-x64-rust-
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - name: Test Rust core
+        working-directory: src-tauri
+        run: cargo test -p filemelon-core --locked
+      - name: Lint Rust core
+        working-directory: src-tauri
+        run: cargo clippy -p filemelon-core --all-targets --locked -- -D warnings
+      - name: Build installer and portable
+        run: npm run build:prod
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Filemelon-windows-x64
+          path: release/*-windows-x64/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish tagged release
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Filemelon-windows-x64
+          path: artifacts
+      - name: Create release and upload files
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $files = @(Get-ChildItem -LiteralPath artifacts -File -Recurse | Where-Object { $_.Extension -eq '.exe' -or $_.Name -eq 'SHA256SUMS.txt' } | ForEach-Object { $_.FullName })
+          if ($files.Count -ne 3) { throw 'Expected installer, portable and checksum manifest.' }
+          gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            & gh release upload $env:RELEASE_TAG @files --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            $releaseArgs = @('release', 'create', $env:RELEASE_TAG) + $files + @('--repo', $env:GITHUB_REPOSITORY, '--verify-tag', '--title', "Filemelon $env:RELEASE_TAG", '--generate-notes')
+            if ($env:RELEASE_TAG.Contains('-')) { $releaseArgs += '--prerelease' }
+            & gh @releaseArgs
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

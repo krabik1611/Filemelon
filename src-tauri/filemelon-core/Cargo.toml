@@ -1,0 +1,20 @@
+[package]
+name = "filemelon-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+cron = "0.17"
+sha2 = "0.10"
+tokio = { version = "1", features = ["sync", "time", "rt-multi-thread", "macros"] }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "derive"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
