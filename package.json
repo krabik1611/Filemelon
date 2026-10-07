@@ -4,7 +4,7 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve",
-    "build": "ng build",
+    "build": "ng build && node scripts/check-styles.cjs",
     "watch": "ng build --watch --configuration development",
     "tauri": "tauri",
     "build:prod": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1",
