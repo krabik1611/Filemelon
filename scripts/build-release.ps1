@@ -21,6 +21,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Production build failed (exit code $LASTEXITCODE). No release files were published." }
 
     $portableSource = Join-Path $binaryDir 'filemelon.exe'
+    & node (Join-Path $PSScriptRoot 'check-exe-icon.cjs') $portableSource
+    if ($LASTEXITCODE -ne 0) { throw 'Executable icon verification failed. No release files were published.' }
     $installerSources = @()
     if ($Mode -ne 'portable') {
         $installerSources = @(Get-ChildItem -LiteralPath (Join-Path $binaryDir 'bundle\nsis') -File | Where-Object { $_.Name -like "filemelon_${version}_*-setup.exe" })
@@ -37,6 +39,20 @@ try {
     if ($Mode -ne 'installer') {
         $portableOutput = Join-Path $outputDir "Filemelon-$version-windows-x64-portable.exe"
         Copy-Item -LiteralPath $portableSource -Destination $portableOutput -Force
+        # Notify Explorer about this file only; leave the user's icon cache intact.
+        try {
+            if (-not ('FilemelonShellNotify' -as [type])) {
+                Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class FilemelonShellNotify {
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    public static extern void SHChangeNotify(uint eventId, uint flags, string item1, IntPtr item2);
+}
+"@
+            }
+            [FilemelonShellNotify]::SHChangeNotify(0x2000, 0x1005, $portableOutput, [IntPtr]::Zero)
+        } catch { Write-Warning "Explorer icon refresh was unavailable: $_" }
         Write-Host "Portable: $portableOutput"
         Write-Host 'Portable requires installed WebView2. Rules and logs remain in AppData.'
     }
@@ -49,4 +65,5 @@ try {
     $env:CARGO_TARGET_DIR = $previousTargetDir
     Pop-Location
 }
+
 
