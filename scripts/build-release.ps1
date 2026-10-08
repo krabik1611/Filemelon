@@ -56,14 +56,12 @@ public static class FilemelonShellNotify {
         Write-Host "Portable: $portableOutput"
         Write-Host 'Portable requires installed WebView2. Rules and logs remain in AppData.'
     }
-    $checksums = Get-ChildItem -LiteralPath $outputDir -File -Filter '*.exe' | Sort-Object Name | ForEach-Object {
-        $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-        "$hash  $($_.Name)"
-    }
-    $checksums | Set-Content -LiteralPath (Join-Path $outputDir 'SHA256SUMS.txt') -Encoding ascii
+    & node (Join-Path $PSScriptRoot 'write-checksums.cjs') $outputDir
+    if ($LASTEXITCODE -ne 0) { throw 'Release checksum generation failed.' }
 } finally {
     $env:CARGO_TARGET_DIR = $previousTargetDir
     Pop-Location
 }
+
 
 
