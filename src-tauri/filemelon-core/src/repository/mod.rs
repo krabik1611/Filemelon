@@ -14,6 +14,7 @@ impl<'s> sqlx::migrate::MigrationSource<'s> for EmbeddedMigrations {
                 Migration::new(1, "init".into(), MigrationType::Simple, include_str!("../../../migrations/0001_init.sql").into(), false),
                 Migration::new(2, "rule engine".into(), MigrationType::Simple, include_str!("../../../migrations/0002_rule_engine.sql").into(), false),
                 Migration::new(3, "cancelled runs".into(), MigrationType::Simple, include_str!("../../../migrations/0003_cancelled_runs.sql").into(), false),
+                Migration::new(4, "rule order".into(), MigrationType::Simple, include_str!("../../../migrations/0004_rule_order.sql").into(), false),
             ])
         })
     }

@@ -111,14 +111,19 @@ impl Core {
                             if owner.and_then(|r| r.id) != rule.id || !files::stable(&meta, rule.min_age_seconds) { skipped += 1; continue; }
                             claimed.insert(canonical);
                             let destination = if rule.action == Action::Sort { template::render(&rule.destination, path, &meta) } else { Ok(rule.destination.clone()) };
-                            let result = match destination {
+                            let result = if rule.action == Action::Delete {
+                                if let Err(e) = self.log(serde_json::json!({"time":timestamp(),"run_id":run_id,"rule_id":rule.id,"action":rule.action,"source":path,"status":"intent","destination":null})) { failed += 1; errors.push(format!("Logging intent failed: {e}")); break; }
+                                let source = path.clone();
+                                let recycle_source = source.clone();
+                                tokio::task::spawn_blocking(move || files::recycle_file(&recycle_source)).await.map_err(|e| files::MoveError::Failed(e.to_string())).and_then(|r| r.map(|_| (source, "recycled")))
+                            } else { match destination {
                                 Ok(dir) => {
                                     if let Err(e) = self.log(serde_json::json!({"time":timestamp(),"run_id":run_id,"rule_id":rule.id,"action":rule.action,"source":path,"directory":dir,"status":"intent"})) { failed += 1; errors.push(format!("Logging intent failed: {e}")); break; }
                                     let age = rule.min_age_seconds; let source = path.clone(); let token = cancel.clone();
                                     tokio::task::spawn_blocking(move || files::move_file_cancellable(&source, &PathBuf::from(dir), age, &token)).await.map_err(|e| files::MoveError::Failed(e.to_string())).and_then(|result| result)
                                 }
                                 Err(e) => Err(files::MoveError::Failed(e)),
-                            };
+                            }};
                             let record = match result {
                                 Ok((destination, kind)) => { if kind == "unchanged" { skipped += 1; } else { processed += 1; } serde_json::json!({"time":timestamp(),"run_id":run_id,"rule_id":rule.id,"action":rule.action,"source":path,"destination":destination,"status":kind}) }
                                 Err(files::MoveError::Cancelled) => serde_json::json!({"time":timestamp(),"run_id":run_id,"rule_id":rule.id,"source":path,"status":"cancelled"}),

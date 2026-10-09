@@ -1,9 +1,23 @@
 import { Component, OnInit, OnDestroy, signal, computed, ViewChild, ElementRef } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { Condition, Rule, Run, NextRun, ActiveRun } from './rule.model';
+type UiSnapshot = { rules: Rule[]; history: Run[]; next: NextRun[]; active: ActiveRun | null };
 @Component({ selector: 'app-root', imports: [FormsModule], templateUrl: './app.component.html', styleUrl: './app.component.css' })
 export class AppComponent implements OnInit, OnDestroy {
+    compact = signal(this.preference('filemelon.compact', false));
+    sidebarHidden = signal(this.preference('filemelon.sidebarHidden', false));
+    draggedRuleId: number | null = null;
+    private preference(key: string, fallback: boolean) { try { const value = localStorage.getItem(key); return value === null ? fallback : value === 'true'; } catch { return fallback; } }
+    setCompact(value: boolean) { this.compact.set(value); try { localStorage.setItem('filemelon.compact', String(value)); } catch {} }
+    toggleSidebar() { const value = !this.sidebarHidden(); this.sidebarHidden.set(value); try { localStorage.setItem('filemelon.sidebarHidden', String(value)); } catch {} }
+    async setAll(enabled: boolean) { await this.act(async () => { await invoke('set_all_rules_enabled', { enabled }); await this.refresh(); }); }
+    async reorder(sourceId: number, targetId: number) { if (sourceId === targetId) return; const ids = this.rules().map(r => r.id!); const from = ids.indexOf(sourceId), to = ids.indexOf(targetId); if (from < 0 || to < 0) return; ids.splice(from, 1); ids.splice(ids.indexOf(targetId), 0, sourceId); await this.act(async () => { await invoke('reorder_rules', { ids }); await this.refresh(); }); }
+    startDrag(event: DragEvent, rule: Rule) { if (rule.id === null || this.busy() || !!this.active()) { event.preventDefault(); return; } this.draggedRuleId = rule.id; event.dataTransfer?.setData('text/plain', String(rule.id)); if (event.dataTransfer) { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.dropEffect = 'move'; } }
+    dragOver(event: DragEvent) { if (this.draggedRuleId !== null) { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'; } }
+    async dropDrag(event: DragEvent, rule: Rule) { event.preventDefault(); const source = this.draggedRuleId; this.draggedRuleId = null; if (source !== null && rule.id !== null) await this.reorder(source, rule.id); }
+    endDrag() { this.draggedRuleId = null; }
     view = signal<'rules' | 'history'>('rules');
     search = signal('');
     ruleFilter = signal<'all' | 'enabled' | 'disabled'>('all');
@@ -187,9 +201,6 @@ export class AppComponent implements OnInit, OnDestroy {
     autostart = signal(false);
     active = signal<ActiveRun | null>(null);
     stopPending = signal(false);
-    private polling = false;
-    private lastHistoryRefresh = 0;
-    private lastScheduleRefresh = 0;
     draft: Rule = this.empty();
     extensions = '';
     contains = '';
@@ -198,7 +209,7 @@ export class AppComponent implements OnInit, OnDestroy {
     conditionMode: 'all' | 'any' = 'all';
     modifiedAge: number | null = null;
     createdAge: number | null = null;
-    private timer?: ReturnType<typeof setInterval>;
+    private unlisten?: UnlistenFn;
     empty(): Rule {
         return { id: null, name: '', source: '', condition: { type: 'all', conditions: [] }, cron: '0 * * * *', enabled: true, action: 'MOVE', destination: '', min_age_seconds: 86400 };
     }
@@ -211,48 +222,16 @@ export class AppComponent implements OnInit, OnDestroy {
             await this.refresh();
             this.autostart.set(await invoke<boolean>('autostart_enabled'));
         });
-        await this.poll();
-        this.timer = setInterval(() => {
-            void this.poll();
-        }, 1000);
+        this.unlisten = await listen<UiSnapshot>('filemelon-state-changed', event => this.applySnapshot(event.payload));
     }
     ngOnDestroy() {
-        if (this.timer)
-            clearInterval(this.timer);
+        this.unlisten?.();
     }
-    async poll() {
-        if (this.polling)
-            return;
-        this.polling = true;
-        try {
-            const active = await invoke<ActiveRun | null>('active_run');
-            const previous = this.active();
-            const changed = previous?.run_id !== active?.run_id || previous?.stopping !== active?.stopping;
-            if (changed)
-                this.active.set(active);
-            const now = Date.now();
-            const historyInterval = this.view() === 'history' || active ? 5000 : 30000;
-            const updates: Promise<void>[] = [];
-            if (changed || now - this.lastHistoryRefresh >= historyInterval) {
-                updates.push(invoke<Run[]>('run_history').then(history => {
-                    this.history.set(history);
-                    this.lastHistoryRefresh = now;
-                }));
-            }
-            if (changed || now - this.lastScheduleRefresh >= 5000) {
-                updates.push(invoke<NextRun[]>('next_runs').then(next => {
-                    this.nextRuns.set(new Map(next.map(n => [n.rule_id, n])));
-                    this.lastScheduleRefresh = now;
-                }));
-            }
-            await Promise.all(updates);
-        }
-        catch (e) {
-            this.error.set(String(e));
-        }
-        finally {
-            this.polling = false;
-        }
+    private applySnapshot(snapshot: UiSnapshot) {
+        this.rules.set(snapshot.rules);
+        this.history.set(snapshot.history);
+        this.nextRuns.set(new Map(snapshot.next.map(n => [n.rule_id, n])));
+        this.active.set(snapshot.active);
     }
     async stop() {
         const run = this.active();
@@ -264,7 +243,7 @@ export class AppComponent implements OnInit, OnDestroy {
             this.active.update(current => current?.run_id === run.run_id ? { ...current, stopping: true } : current);
         }
         catch (e) {
-            await this.poll();
+            await this.refresh();
             if (this.active()?.run_id === run.run_id)
                 this.error.set(String(e));
         }
@@ -277,8 +256,6 @@ export class AppComponent implements OnInit, OnDestroy {
         this.rules.set(rules);
         this.history.set(history);
         this.nextRuns.set(new Map(next.map(n => [n.rule_id, n])));
-        this.lastHistoryRefresh = Date.now();
-        this.lastScheduleRefresh = Date.now();
     }
     async act(action: () => Promise<unknown>) {
         if (this.busy())

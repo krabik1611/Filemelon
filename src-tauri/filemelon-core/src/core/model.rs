@@ -43,7 +43,7 @@ impl Condition {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Action { Move, Sort }
+pub enum Action { Move, Sort, Delete }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
@@ -63,7 +63,7 @@ impl Rule {
     fn validate_config(&self, require_source: bool) -> Result<(), String> {
         if self.name.trim().is_empty() { return Err("Rule name is required".into()); }
         if !Path::new(&self.source).is_absolute() || (require_source && !Path::new(&self.source).is_dir()) { return Err("Source must be an existing absolute directory".into()); }
-        if !Path::new(&self.destination).is_absolute() { return Err("Destination must be absolute".into()); }
+        if self.action != Action::Delete && !Path::new(&self.destination).is_absolute() { return Err("Destination must be absolute".into()); }
         if self.min_age_seconds > i64::MAX as u64 { return Err("File age is too large".into()); }
         self.condition.validate(0)?;
         let cron = schedule(&self.cron)?;

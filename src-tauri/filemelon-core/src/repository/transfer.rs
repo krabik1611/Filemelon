@@ -24,8 +24,9 @@ impl RulesRepository {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         for rule in &bundle.rules {
             let expr = serde_json::to_string(&rule.condition).map_err(|e| e.to_string())?;
-            let id = sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds) VALUES(?,?,?,?,0,?)").bind(&rule.name).bind(&rule.source).bind(expr).bind(&rule.cron).bind(rule.min_age_seconds as i64).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid();
-            sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(if rule.action == Action::Move {0} else {1}).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            let order: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order),0)+1 FROM rules").fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+            let id = sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds,sort_order) VALUES(?,?,?,?,0,?,?)").bind(&rule.name).bind(&rule.source).bind(expr).bind(&rule.cron).bind(rule.min_age_seconds as i64).bind(order).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid();
+            sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(match rule.action { Action::Move=>0, Action::Sort=>1, Action::Delete=>2 }).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(ImportResult {imported:bundle.rules.len()})

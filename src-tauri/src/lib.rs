@@ -1,15 +1,19 @@
 pub use filemelon_core::{core, repository};
 use crate::core::{Core, model::{Rule, RuleRun}};
 use std::sync::Arc;
-use tauri::{Manager, State, menu::{Menu, MenuItem}, tray::TrayIconBuilder};
+use tauri::{Emitter, Manager, State, menu::{Menu, MenuItem}, tray::TrayIconBuilder};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
+use serde::Serialize;
+use std::time::Duration;
 fn native_file_dialog(app: &tauri::AppHandle) -> tauri_plugin_dialog::FileDialogBuilder<tauri::Wry> {
     let mut dialog = app.dialog().file();
     if let Some(window) = app.get_webview_window("main") { dialog = dialog.set_parent(&window); }
     dialog
 }
 struct AppState { core: Arc<Core> }
+#[derive(Serialize)]
+struct UiSnapshot { rules: Vec<Rule>, history: Vec<RuleRun>, next: Vec<core::scheduler::NextRun>, active: Option<core::ActiveRunStatus> }
 #[tauri::command]
 async fn list_rules(state: State<'_, AppState>) -> Result<Vec<Rule>, String> { state.core.repository.rules.list().await }
 #[tauri::command]
@@ -21,6 +25,19 @@ async fn save_rule(state: State<'_, AppState>, rule: Rule) -> Result<i64, String
 async fn set_rule_enabled(state: State<'_, AppState>, id: i64, enabled: bool) -> Result<(), String> {
     let _guard = state.core.gate.lock().await;
     state.core.repository.rules.set_enabled(id, enabled).await?; state.core.invalidate_schedule(id); Ok(())
+}
+#[tauri::command]
+async fn reorder_rules(state: State<'_, AppState>, ids: Vec<i64>) -> Result<(), String> {
+    let _guard = state.core.gate.lock().await;
+    state.core.repository.rules.reorder(&ids).await
+}
+#[tauri::command]
+async fn set_all_rules_enabled(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let _guard = state.core.gate.lock().await;
+    let ids: Vec<i64> = state.core.repository.rules.list().await?.into_iter().filter_map(|r| r.id).collect();
+    state.core.repository.rules.set_all_enabled(enabled).await?;
+    for id in ids { state.core.invalidate_schedule(id); }
+    Ok(())
 }
 #[tauri::command]
 async fn run_now(state: State<'_, AppState>, id: i64) -> Result<Vec<RuleRun>, String> { state.core.run_now(id).await }
@@ -87,7 +104,7 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--background"])))
-        .invoke_handler(tauri::generate_handler![list_rules,next_runs,export_rules,import_rules,pick_directory,save_rule,delete_rule,set_rule_enabled,run_now,run_history,active_run,stop_run,autostart_enabled,set_autostart])
+        .invoke_handler(tauri::generate_handler![list_rules,next_runs,export_rules,import_rules,pick_directory,save_rule,delete_rule,set_rule_enabled,set_all_rules_enabled,reorder_rules,run_now,run_history,active_run,stop_run,autostart_enabled,set_autostart])
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let core = tauri::async_runtime::block_on(Core::open(data_dir)).map_err(std::io::Error::other)?;
@@ -108,7 +125,26 @@ pub fn run() {
                 }
             }).build(app)?;
             if std::env::args().any(|arg| arg == "--background") { if let Some(window) = app.get_webview_window("main") { window.hide()?; } }
-            tauri::async_runtime::spawn(core::scheduler::serve(core));
+            let scheduler_core = core.clone();
+            tauri::async_runtime::spawn(core::scheduler::serve(scheduler_core));
+            let event_core = core.clone();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut previous = String::new();
+                loop {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let snapshot = match async {
+                        let rules = event_core.repository.rules.list().await?;
+                        let history = event_core.repository.history().await?;
+                        let next = event_core.next_runs().await?;
+                        Ok::<_, String>(UiSnapshot { rules, history, next, active: event_core.active_run() })
+                    }.await { Ok(value) => value, Err(_) => continue };
+                    let encoded = match serde_json::to_string(&snapshot) { Ok(value) => value, Err(_) => continue };
+                    if encoded == previous { continue; }
+                    previous = encoded;
+                    let _ = app_handle.emit("filemelon-state-changed", &snapshot);
+                }
+            });
             Ok(())
         })
         .on_window_event(|window, event| { if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); let _ = window.hide(); } })

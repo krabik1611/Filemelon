@@ -5,6 +5,20 @@ use std::os::windows::fs::OpenOptionsExt;
 
 #[derive(Debug)]
 pub enum MoveError { Cancelled, Failed(String) }
+
+#[cfg(windows)]
+pub fn recycle_file(path: &std::path::Path) -> Result<(), MoveError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{SHFileOperationW, SHFILEOPSTRUCTW, FO_DELETE, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT};
+    let mut from: Vec<u16> = path.as_os_str().encode_wide().collect();
+    from.push(0); from.push(0);
+    let mut op = SHFILEOPSTRUCTW { hwnd: std::ptr::null_mut(), wFunc: FO_DELETE, pFrom: from.as_ptr(), pTo: std::ptr::null(), fFlags: (FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT) as u16, fAnyOperationsAborted: 0, hNameMappings: std::ptr::null_mut(), lpszProgressTitle: std::ptr::null() };
+    let code = unsafe { SHFileOperationW(&mut op) };
+    if code == 0 && op.fAnyOperationsAborted == 0 { Ok(()) } else { Err(MoveError::Failed(format!("Recycle Bin operation failed ({code})"))) }
+}
+
+#[cfg(not(windows))]
+pub fn recycle_file(_path: &std::path::Path) -> Result<(), MoveError> { Err(MoveError::Failed("Deleting to the Recycle Bin is supported on Windows only".into())) }
 impl From<io::Error> for MoveError {
     fn from(error: io::Error) -> Self {
         if error.kind() == io::ErrorKind::Interrupted { Self::Cancelled } else { Self::Failed(error.to_string()) }

@@ -7,11 +7,11 @@ pub struct RulesRepository { pool: SqlitePool }
 impl RulesRepository {
     pub fn new(pool: SqlitePool) -> Self { Self { pool } }
     pub async fn list(&self) -> Result<Vec<Rule>, String> {
-        let rows = sqlx::query("SELECT r.*, a.action_type, a.destination_template FROM rules r LEFT JOIN rule_actions a ON a.id=(SELECT MIN(id) FROM rule_actions WHERE rule_id=r.id) ORDER BY r.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
+        let rows = sqlx::query("SELECT r.*, a.action_type, a.destination_template FROM rules r LEFT JOIN rule_actions a ON a.id=(SELECT MIN(id) FROM rule_actions WHERE rule_id=r.id) ORDER BY r.sort_order, r.id").fetch_all(&self.pool).await.map_err(|e| e.to_string())?;
         rows.iter().map(|r| Ok(Rule {
             id: Some(r.get("id")), name: r.get("name"), source: r.get("source"), cron: r.get("cron"), enabled: r.get::<i64,_>("enabled") != 0,
             condition: serde_json::from_str(r.get::<&str,_>("expr")).map_err(|e| format!("Rule {} has unsupported legacy conditions; migrate expr to JSON: {e}", r.get::<i64,_>("id")))?,
-            action: match r.try_get::<i64,_>("action_type").map_err(|_| "Missing action")? { 0 => Action::Move, 1 => Action::Sort, _ => return Err("Unsupported action type".into()) },
+            action: match r.try_get::<i64,_>("action_type").map_err(|_| "Missing action")? { 0 => Action::Move, 1 => Action::Sort, 2 => Action::Delete, _ => return Err("Unsupported action type".into()) },
             destination: r.try_get("destination_template").map_err(|e| e.to_string())?, min_age_seconds: r.get::<i64,_>("min_age_seconds") as u64,
         })).collect()
     }
@@ -24,9 +24,10 @@ impl RulesRepository {
             if result.rows_affected() != 1 { return Err("Rule not found".into()); }
             sqlx::query("DELETE FROM rule_actions WHERE rule_id=?").bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?; id
         } else {
-            sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds) VALUES(?,?,?,?,?,?)").bind(&rule.name).bind(&rule.source).bind(&expr).bind(&rule.cron).bind(rule.enabled).bind(rule.min_age_seconds as i64).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid()
+            let order: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order),0)+1 FROM rules").fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
+            sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds,sort_order) VALUES(?,?,?,?,?,?,?)").bind(&rule.name).bind(&rule.source).bind(&expr).bind(&rule.cron).bind(rule.enabled).bind(rule.min_age_seconds as i64).bind(order).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid()
         };
-        sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(if rule.action == Action::Move {0} else {1}).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(match rule.action { Action::Move=>0, Action::Sort=>1, Action::Delete=>2 }).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())?; Ok(id)
     }
     pub async fn delete_disabled(&self, id: i64) -> Result<(), String> {
@@ -35,12 +36,23 @@ impl RulesRepository {
         if result.rows_affected() != 1 { return Err("Only an existing disabled rule can be deleted".into()); }
         Ok(())
     }
+    pub async fn reorder(&self, ids: &[i64]) -> Result<(), String> {
+        let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
+        let stored: Vec<i64> = sqlx::query_scalar("SELECT id FROM rules ORDER BY sort_order,id").fetch_all(&mut *tx).await.map_err(|e| e.to_string())?;
+        if stored.len() != ids.len() || stored.iter().collect::<std::collections::HashSet<_>>() != ids.iter().collect::<std::collections::HashSet<_>>() { return Err("Rule order is stale; reload and try again".into()); }
+        for (position,id) in ids.iter().enumerate() { sqlx::query("UPDATE rules SET sort_order=? WHERE id=?").bind(position as i64 + 1).bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?; }
+        tx.commit().await.map_err(|e| e.to_string())
+    }
     pub async fn set_enabled(&self, id: i64, enabled: bool) -> Result<(), String> {
         if enabled {
             let rules = self.list().await?;
             rules.iter().find(|rule|rule.id==Some(id)).ok_or("Rule not found")?.validate()?;
         }
         if sqlx::query("UPDATE rules SET enabled=? WHERE id=?").bind(enabled).bind(id).execute(&self.pool).await.map_err(|e| e.to_string())?.rows_affected() != 1 { return Err("Rule not found".into()); } Ok(())
+    }
+    pub async fn set_all_enabled(&self, enabled: bool) -> Result<(), String> {
+        sqlx::query("UPDATE rules SET enabled=?").bind(enabled).execute(&self.pool).await.map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 

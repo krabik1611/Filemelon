@@ -22,7 +22,7 @@ export interface Rule {
     condition: Condition;
     cron: string;
     enabled: boolean;
-    action: 'MOVE' | 'SORT';
+    action: 'MOVE' | 'SORT' | 'DELETE';
     destination: string;
     min_age_seconds: number;
 }
