@@ -10,7 +10,7 @@ chrono = { version = "0.4", features = ["serde"] }
 cron = "0.17"
 sha2 = "0.10"
 tokio = { version = "1", features = ["sync", "time", "rt-multi-thread", "macros"] }
-sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "derive"] }
+sqlx = { version = "0.8.6", default-features = false, features = ["sqlite", "runtime-tokio", "migrate", "derive"] }
 
 [dev-dependencies]
 tempfile = "3"
