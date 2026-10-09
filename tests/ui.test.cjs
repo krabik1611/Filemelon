@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const source = ts.createSourceFile('app.component.ts', fs.readFileSync('src/app/app.component.ts', 'utf8'), ts.ScriptTarget.Latest, true);
 const component = source.statements.find(node => ts.isClassDeclaration(node));
-const selected = new Set(['timeUnits','sizeUnits','formatSize','displayUnit','scaled','browse','poll','editorPointerDown','editorClick','isEditorBackdrop','closeEditor']);
+const selected = new Set(['timeUnits','sizeUnits','formatSize','displayUnit','scaled','browse','applySnapshot','editorPointerDown','editorClick','isEditorBackdrop','closeEditor']);
 const printer = ts.createPrinter();
 const methods = component.members.filter(member => member.name && selected.has(member.name.getText(source)))
   .map(member => printer.printNode(ts.EmitHint.Unspecified, member, source)).join('\n');
@@ -13,11 +13,9 @@ const code = ts.transpileModule(`class Harness {${methods}\n draft:any; async ac
 }).outputText;
 let selectedDirectory=null;
 let calls=[];
-let activeRun=null;
 const invoke=async command=>{
   calls.push(command);
   if(command==='pick_directory')return selectedDirectory;
-  if(command==='active_run')return activeRun;
   return [];
 };
 const Harness=new Function('invoke',code+'\nreturn Harness;')(invoke);
@@ -52,11 +50,11 @@ test('backdrop dismisses only an outside click and respects saving lock',()=>{
   h.busy.set(true);h.editorPointerDown(outside);h.editorClick(outside);assert.equal(closes,1);
 });
 
-test('idle polling avoids history reads and refreshes when a run starts or ends',async()=>{
-  const h=new Harness();h.active=signal(null);h.history=signal([]);h.nextRuns=signal(new Map());h.view=signal('rules');h.error=signal('');
-  h.lastHistoryRefresh=Date.now();h.lastScheduleRefresh=Date.now();h.polling=false;activeRun=null;calls=[];
-  await h.poll();assert.deepEqual(calls,['active_run']);
-  activeRun={run_id:1,stopping:false};calls=[];await h.poll();
-  assert.deepEqual(calls,['active_run','run_history','next_runs']);assert.equal(h.active().run_id,1);
-  activeRun=null;calls=[];await h.poll();assert.deepEqual(calls,['active_run','run_history','next_runs']);assert.equal(h.active(),null);
+test('state events update the active run, rules, history and schedule without polling',()=>{
+  calls=[];
+  const h=new Harness();h.active=signal(null);h.rules=signal([]);h.history=signal([]);h.nextRuns=signal(new Map());
+  h.applySnapshot({rules:[{id:1}],history:[{id:2}],next:[{rule_id:1,time:null,waiting:false,error:null}],active:{run_id:3,stopping:false}});
+  assert.equal(h.active().run_id,3);assert.deepEqual(h.rules(),[{id:1}]);assert.deepEqual(h.history(),[{id:2}]);assert.equal(h.nextRuns().get(1).rule_id,1);
+  h.applySnapshot({rules:[],history:[],next:[],active:null});assert.equal(h.active(),null);assert.deepEqual(h.rules(),[]);assert.deepEqual(h.history(),[]);
+  assert.equal(h.nextRuns().size,0);assert.deepEqual(calls,[]);
 });
