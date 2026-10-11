@@ -2,58 +2,59 @@
 
 # Filemelon
 
-Локальный организатор файлов для Windows. Настройте правила перемещения и сортировки — Filemelon будет выполнять их по расписанию и работать в системном трее.
+A local Windows file organizer. Configure move, copy, and sorting rules; Filemelon runs them on schedule and stays in the system tray.
 
-## Установка
+## Installation
 
-В GitHub Releases выберите один из файлов:
+Choose one of these files in GitHub Releases:
 
-- **`Filemelon-<версия>-windows-x64-setup.exe`** — установщик. Включает WebView2 и подходит для установки без интернета. Устанавливает приложение для текущего пользователя.
-- **`Filemelon-<версия>-windows-x64-portable.exe`** — запуск без установки Filemelon. Требует установленного Microsoft Edge WebView2 Runtime. Правила и история хранятся в AppData, поэтому portable не переносит настройки вместе с EXE.
+- **`Filemelon-<version>-windows-x64-setup.exe`** — installer with WebView2, suitable for offline installation. Installs for the current user.
+- **`Filemelon-<version>-windows-x64-portable.exe`** — runs without installation. Requires Microsoft Edge WebView2 Runtime. Rules and history are stored in AppData, so settings do not travel with the portable EXE.
 
-Node.js и Rust на компьютере пользователя не нужны. Portable и установленная версия используют общие настройки; одновременно работает один экземпляр. После переноса portable-файла выключите и снова включите автозапуск из нового расположения.
+Users do not need Node.js or Rust. The portable and installed versions share settings; only one instance runs at a time. After moving the portable file, disable and re-enable Windows autostart from the new location.
 
-## Использование
+## Usage
 
-1. Создайте правило и выберите исходную папку.
-2. Укажите условия: расширение, часть имени, размер, возраст создания или изменения. Можно требовать все условия или хотя бы одно.
-3. Выберите действие и папку назначения:
-   - **MOVE** — переместить файлы в одну папку.
-   - **COPY** — копировать и синхронизировать файлы с папкой назначения.
-   - **SORT** — разложить файлы по подпапкам с помощью шаблона пути.
-4. Задайте расписание и минимальный период с последнего изменения файла.
-5. Включите правило или нажмите **«Запустить сейчас»**.
+1. Create a rule and choose a source folder.
+2. Add conditions for extension, part of the name, size, creation age, or modification age. A rule can require all conditions or any condition.
+3. Choose an action and destination:
+   - **MOVE** — move files into one folder.
+   - **COPY** — copy and synchronize files with a destination folder.
+   - **SORT** — place files into subfolders using a path template.
+4. Set a schedule and the minimum time since the last file change.
+5. Enable the rule or click **Run now**.
 
-Опция **«Учитывать вложенные папки»** включается отдельно для каждого правила. При включении сохраняется относительная структура подпапок в папке назначения.
+Enable **Include subfolders** separately for each rule. When enabled, relative subfolder structure is preserved at the destination for move, copy, and sort actions. When disabled, only files directly inside the source folder are scanned.
 
-Следующий запуск отображается в местном времени. Работы выполняются последовательно. Файл принадлежит первому включённому подходящему правилу в порядке создания; ручной запуск сохраняет этот приоритет. Исходные папки обрабатываются без рекурсии, поэтому `Downloads\Sorted` внутри исходной папки не сканируется повторно.
+The next run is shown in local time. Rules execute sequentially. A file belongs to the first enabled matching rule in creation order; manual runs use the same priority. Nested folders are scanned only when **Include subfolders** is enabled.
 
-**Шаблон SORT**, например:
+A **SORT** template can look like this:
 
 ```text
 D:\Archive\{extension}\{year}\{month}
 ```
 
-Доступны `{filename}` (имя без расширения), `{extension}`, `{year}`, `{month}`, `{day}`, `{created.year}`, `{created.month}`, `{created.day}`. Обычные поля даты используют дату выполнения; `created.*` — дату создания файла. Шаблон определяет каталог назначения, а исходное имя файла сохраняется.
+Available tokens are `{filename}` (name without extension), `{extension}`, `{year}`, `{month}`, `{day}`, `{created.year}`, `{created.month}`, and `{created.day}`. Ordinary date tokens use the execution date; `created.*` tokens use the file creation date. The template determines the destination directory while preserving the original file name.
 
-Размер задаётся в Б/КБ/МБ/ГБ/ТБ, где 1 КБ = 1024 Б. Возраст — в секундах, минутах, часах или днях. Независимо от указанного возраста файл должен быть стабилен минимум две секунды.
+Sizes use B/KB/MB/GB/TB, where 1 KB = 1024 B. Ages use seconds, minutes, hours, or days. Regardless of the configured age, a file must be stable for at least two seconds.
 
-## Обработка файлов
+## File processing
 
-- В пределах диска используется нативное перемещение без повторного чтения содержимого.
-- Между дисками файл копируется с проверкой SHA-256; источник удаляется после успешной проверки.
-- При конфликте одинаковое содержимое распознаётся по SHA-256: существующий файл сохраняется, источник-дубликат удаляется. Если содержимое отличается, добавляется суффикс `_1`, `_2` и т. д.
-- Кнопка **«Остановить»** отменяет текущую обработку. Уже выполненные перемещения сохраняются; копирование и вычисление хеша проверяют отмену между блоками. Незавершённая копия удаляется при отмене.
-- Выключенное правило можно удалить вместе с историей его запусков.
-- Закрытие окна оставляет приложение в трее. Для полного выхода используйте меню трея. Автозапуск Windows настраивается в боковой панели.
+- Within one drive, MOVE uses a native rename without rereading file contents.
+- Across drives, MOVE copies with SHA-256 verification and removes the source only after successful verification.
+- COPY compares SHA-256 content, skips identical files, and safely replaces changed destination files. Sources are never removed.
+- On conflicts, identical content is recognized by SHA-256. For MOVE, an identical source is removed as a duplicate; different content receives `_1`, `_2`, and later suffixes.
+- **Stop** cancels the current processing. Completed operations remain completed; copying and hashing observe cancellation between chunks. A partial copy is removed when cancelled.
+- Disabled rules can be deleted together with their run history.
+- Closing the window leaves the app in the tray. Use the tray menu to exit completely. Configure Windows autostart in the sidebar.
 
-## Импорт, история и данные
+## Import, history, and data
 
-Импорт и экспорт JSON используют стандартные диалоги Windows. Формат — объект `{ "version": 1, "rules": [...] }`. Импорт добавляет правила выключенными и не заменяет существующие; идентификаторы создаются заново. Перед включением проверьте пути. Максимум — 5 МиБ и 1000 правил, импорт выполняется одной транзакцией после проверки всех записей.
+JSON import and export use standard Windows dialogs. The format is `{ "version": 1, "rules": [...] }`. Import adds disabled rules without replacing existing rules; new identifiers are assigned. Check paths before enabling imported rules. Files are limited to 5 MiB and 1,000 rules, and import runs as one transaction after every record has been validated.
 
-Настройки и история: `%APPDATA%\com.krabby.filemelon\app.db`. Подробные операции: `logs\operations-YYYY-MM-DD.jsonl` в той же папке. Последние 200 запусков отображаются в интерфейсе; старые записи и файловые логи автоматически не удаляются. Миграции SQLite встроены в исполняемый файл и применяются при запуске. После аварийного завершения незаконченные запуски отмечаются как прерванные.
+Settings and history are stored in `%APPDATA%\com.krabby.filemelon\app.db`. Detailed operations are written to `logs\operations-YYYY-MM-DD.jsonl` in the same directory. The latest 200 runs appear in the UI; old database rows and log files are not removed automatically. SQLite migrations are embedded in the executable and applied at startup. After an unexpected exit, unfinished runs are marked interrupted.
 
-## Архитектура
+## Architecture
 
 ```text
 Angular UI
@@ -66,29 +67,29 @@ filemelon-core (Rust)
     └── repository / SQLite migrations / run history
 ```
 
-Angular отвечает за отображение и ввод. Правила, расписание, проверка файлов, перемещения и хранение данных реализованы в независимом Rust-crate `filemelon-core`. Desktop-адаптер подключает возможности Windows и сериализует изменение правил с выполнением задач. SQLx использует только SQLite и необходимые derive/runtime-функции. Журнал повторно использует открытый файл до смены дня; синхронизация с диском выполняется после запуска правила. Планировщик повторно разбирает cron только при изменении или наступлении следующего запуска.
+Angular handles display and input. Rules, scheduling, file validation, transfers, and persistence live in the independent `filemelon-core` Rust crate. The desktop adapter provides Windows integrations and serializes rule changes while tasks run. SQLx uses SQLite with only the required derive and runtime features. The logger keeps one file open until the day changes; disk synchronization runs after a rule starts. The scheduler reparses cron only when a rule changes or its next occurrence arrives.
 
 ```text
-.github/workflows/     проверки, Windows-сборка и публикация релиза
-scripts/               локальная сборка и проверка версий
-src/                   Angular UI и исходный логотип
+.github/workflows/     checks, Windows builds, and release publishing
+scripts/               local builds and version checks
+src/                   Angular UI and source logo
 src-tauri/src/         Tauri desktop adapter
-src-tauri/filemelon-core/ Rust core и его тесты
-src-tauri/migrations/   неизменяемые миграции SQLite
-src-tauri/icons/        иконки Windows, полученные из логотипа
-tests/                 проверки поведения UI
+src-tauri/filemelon-core/ Rust core and tests
+src-tauri/migrations/  immutable SQLite migrations
+src-tauri/icons/       Windows icons generated from the logo
+tests/                 UI behavior checks
 ```
 
-## Разработка
+## Development
 
-Нужны Node.js 24 LTS, Rust stable с целью `x86_64-pc-windows-msvc`, Visual Studio Build Tools с **Desktop development with C++**, Windows SDK и WebView2. Первая сборка требует интернет для зависимостей и инструментов упаковки.
+Requirements: Node.js 24 LTS, stable Rust with the `x86_64-pc-windows-msvc` target, Visual Studio Build Tools with **Desktop development with C++**, Windows SDK, and WebView2. The first build needs internet access for dependencies and packaging tools.
 
 ```powershell
 npm ci
 npm run tauri -- dev
 ```
 
-Проверки:
+Checks:
 
 ```powershell
 npm run check
@@ -98,38 +99,38 @@ cargo test --manifest-path src-tauri/Cargo.toml -p filemelon-core --locked
 cargo clippy --manifest-path src-tauri/Cargo.toml -p filemelon-core --all-targets --locked -- -D warnings
 ```
 
-## Production-сборка
+## Production build
 
 ```powershell
 npm run build:prod
 ```
 
-Одна команда собирает release-приложение, NSIS-установщик с offline WebView2 и standalone portable EXE. Результаты и `SHA256SUMS.txt` появляются в `release/<версия>-windows-x64/`. Для отдельного варианта есть `npm run build:installer` и `npm run build:portable`; portable-сборка пропускает упаковку WebView2. Сборка прекращается при ошибке. Файлы предыдущей успешной сборки могут остаться в каталоге — ориентируйтесь на результат команды и дату файлов.
+One command builds the release app, an NSIS installer with offline WebView2, and a standalone portable EXE. Outputs and `SHA256SUMS.txt` appear in `release/<version>-windows-x64/`. Use `npm run build:installer` or `npm run build:portable` for one variant; the portable build skips WebView2 packaging. The build stops on errors. Files from a previous successful build may remain in the directory, so check the command result and file dates.
 
-## GitHub Actions и релизы
+## GitHub Actions and releases
 
-Workflow `.github/workflows/windows-release.yml` выполняет проверки UI и Rust, затем собирает оба EXE на Windows x64. Он запускается при push, pull request и вручную через вкладку Actions. Обычные сборки доступны в артефакте **Filemelon-windows-x64**.
+`.github/workflows/windows-release.yml` runs UI and Rust checks, then builds both EXEs on Windows x64. It runs on pushes, pull requests, and manual dispatch from the Actions tab. Ordinary builds are available in the **Filemelon-windows-x64** artifact.
 
-Для выпуска:
+To publish a release:
 
-1. Обновите версию в `package.json`, `src-tauri/tauri.conf.json` и обоих `Cargo.toml`.
-2. Обновите `package-lock.json` и `src-tauri/Cargo.lock`, выполните проверки и закоммитьте изменения.
-3. Создайте и отправьте тег, совпадающий с версией:
+1. Update the version in `package.json`, `src-tauri/tauri.conf.json`, and both `Cargo.toml` files.
+2. Update `package-lock.json` and `src-tauri/Cargo.lock`, run the checks, and commit the changes.
+3. Create and push a tag matching the version:
 
 ```powershell
 git tag v0.1.3
 git push origin v0.1.3
 ```
 
-После успешной сборки workflow создаёт GitHub Release и прикладывает установщик, portable и контрольные суммы. Теги с суффиксом, например `v0.2.0-beta.1`, публикуются как prerelease. Проверка версий останавливает выпуск при несовпадении тега с конфигурацией. Используется встроенный `GITHUB_TOKEN`: чтение для сборки, запись только для задания публикации. Отдельный секрет не требуется; политика репозитория должна разрешать публикацию Releases через Actions.
+After a successful build, the workflow creates a GitHub Release and attaches the installer, portable build, and checksums. Tags with a suffix, such as `v0.2.0-beta.1`, are published as prereleases. Version checks stop a release when the tag does not match the configuration. The workflow uses the built-in `GITHUB_TOKEN`: read access for builds and write access only for publishing. No separate secret is required; repository policy must allow Releases through Actions.
 
-## Текущие ограничения
+## Current limitations
 
-Поддерживается Windows x64. Редактор UI работает с одной группой условий; вложенные группы JSON поддерживаются ядром, но не редактируются в форме. Нет автоматического обновления приложения, автоматической очистки истории и логов или цифровой подписи выпусков. Перед публичным распространением проверяйте установку, tray/autostart и перемещения на обычной Windows-машине.
+Windows x64 is supported. The UI editor supports one condition group; nested groups are supported by the core and JSON format but cannot be edited in the form. There is no automatic application update, automatic cleanup of history or logs, or release signing. Before public distribution, test installation, tray/autostart, and file transfers on a normal Windows machine.
 
-### Управление правилами
+### Rule management
 
-- Действие **Удалить в корзину** отправляет совпавшие файлы в Корзину Windows, сохраняя возможность восстановления.
-- Кнопки «Включить все» и «Выключить все» применяют состояние ко всем правилам.
-- Приоритетом является порядок в списке. Перетащите правило за маркер `⋮⋮` в карточном или компактном виде.
-- Компактный вид и состояние бокового меню сохраняются локально в приложении.
+- **Move to Recycle Bin** sends matching files to the Windows Recycle Bin so they can be restored.
+- **Enable all** and **Disable all** apply the state to every rule.
+- Priority follows list order. Drag a rule by the `⋮⋮` handle in card or compact view.
+- Compact view, sidebar visibility, and language choice are saved locally in the app.

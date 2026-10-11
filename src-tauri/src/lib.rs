@@ -63,7 +63,7 @@ async fn next_runs(state: State<'_, AppState>) -> Result<Vec<core::scheduler::Ne
 #[tauri::command]
 async fn pick_directory(app: tauri::AppHandle, current: Option<String>) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut picker = native_file_dialog(&app).set_title("Выберите папку");
+        let mut picker = native_file_dialog(&app).set_title("Choose a folder");
         if let Some(current) = current {
             if let Some(parent) = std::path::Path::new(&current).ancestors().find(|p| p.is_dir()) { picker = picker.set_directory(parent); }
         }
@@ -74,7 +74,7 @@ async fn pick_directory(app: tauri::AppHandle, current: Option<String>) -> Resul
 async fn export_rules(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Option<String>, String> {
     let json = { let _guard = state.core.gate.lock().await; state.core.repository.rules.export_json().await? };
     tauri::async_runtime::spawn_blocking(move || {
-        let selected = native_file_dialog(&app).set_title("Экспорт правил Filemelon").add_filter("JSON", &["json"]).set_file_name("filemelon-rules.json").blocking_save_file();
+        let selected = native_file_dialog(&app).set_title("Export Filemelon rules").add_filter("JSON", &["json"]).set_file_name("filemelon-rules.json").blocking_save_file();
         let Some(selected) = selected else { return Ok(None); };
         let path = selected.into_path().map_err(|e|e.to_string())?;
         std::fs::write(&path, json).map_err(|e|e.to_string())?;
@@ -85,7 +85,7 @@ async fn export_rules(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
 async fn import_rules(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<Option<repository::rules::ImportResult>, String> {
     let json = tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>, String> {
         use std::io::Read;
-        let selected = native_file_dialog(&app).set_title("Импорт правил Filemelon").add_filter("JSON", &["json"]).blocking_pick_file();
+        let selected = native_file_dialog(&app).set_title("Import Filemelon rules").add_filter("JSON", &["json"]).blocking_pick_file();
         let Some(selected) = selected else { return Ok(None); };
         let path = selected.into_path().map_err(|e|e.to_string())?;
         let mut json = String::new();
@@ -109,8 +109,8 @@ pub fn run() {
             let data_dir = app.path().app_data_dir()?;
             let core = tauri::async_runtime::block_on(Core::open(data_dir)).map_err(std::io::Error::other)?;
             app.manage(AppState { core: core.clone() });
-            let show = MenuItem::with_id(app, "show", "Открыть Filemelon", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Выйти из Filemelon", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "Open Filemelon", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "Exit Filemelon", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
             let icon = app.default_window_icon().ok_or_else(|| std::io::Error::other("Missing tray icon"))?.clone();
             TrayIconBuilder::new().icon(icon).tooltip("Filemelon").menu(&menu).on_menu_event(|app, event| {
