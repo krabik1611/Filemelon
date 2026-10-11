@@ -55,7 +55,7 @@ mod tests {
     use crate::core::model::{Action,Condition};
     #[test]
     fn advances_due_occurrence_once_and_keeps_future_cache() {
-        let rule=Rule{id:Some(1),name:String::new(),source:String::new(),condition:Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:String::new(),min_age_seconds:0};
+        let rule=Rule{id:Some(1),name:String::new(),source:String::new(),condition:Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:String::new(),min_age_seconds:0,include_subdirectories:false};
         let now=Local::now(); let mut cache=HashMap::new();
         assert!(!advance_schedule(&rule, &mut cache, &now));
         let future=cache[&1].1;
@@ -70,7 +70,7 @@ mod tests {
         assert_eq!(cache[&1].0, changed.cron);
     }
     #[test] fn next_run_uses_scheduler_cache_and_handles_disabled_rules() {
-        let mut rule=Rule{id:Some(1),name:String::new(),source:String::new(),condition:Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:String::new(),min_age_seconds:0};
+        let mut rule=Rule{id:Some(1),name:String::new(),source:String::new(),condition:Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:String::new(),min_age_seconds:0,include_subdirectories:false};
         let now=Local::now(); let mut cache=HashMap::new();
         let next=next_run(&rule,&cache,&now);assert!(next.time.is_some());assert!(!next.waiting);
         let overdue=now-chrono::Duration::minutes(1);cache.insert(1,(rule.cron.clone(),Some(overdue)));

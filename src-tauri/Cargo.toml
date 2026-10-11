@@ -1,6 +1,6 @@
 [package]
 name = "filemelon"
-version = "0.1.2"
+version = "0.1.3"
 description = "Filemelon Windows file organizer"
 edition = "2021"
 

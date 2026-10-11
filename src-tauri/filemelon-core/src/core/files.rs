@@ -81,6 +81,29 @@ fn rename_locked(file: &File, source: &Path, destination: &Path) -> io::Result<(
         Ok(())
     }
 }
+fn rename_locked_replace(file: &File, source: &Path, destination: &Path) -> io::Result<()> {
+    #[cfg(windows)] {
+        use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
+        use windows_sys::Win32::Storage::FileSystem::{SetFileInformationByHandle, FileRenameInfo, FILE_RENAME_INFO};
+        let name: Vec<u16> = destination.as_os_str().encode_wide().collect();
+        let offset = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+        let bytes = (offset + (name.len() + 1) * 2).max(std::mem::size_of::<FILE_RENAME_INFO>());
+        let mut storage = vec![0usize; bytes.div_ceil(std::mem::size_of::<usize>())];
+        let result = unsafe {
+            let info = storage.as_mut_ptr().cast::<FILE_RENAME_INFO>();
+            (*info).Anonymous.ReplaceIfExists = true;
+            (*info).FileNameLength = (name.len() * 2) as u32;
+            std::ptr::copy_nonoverlapping(name.as_ptr(), storage.as_mut_ptr().cast::<u8>().add(offset).cast::<u16>(), name.len());
+            SetFileInformationByHandle(file.as_raw_handle(), FileRenameInfo, info.cast(), bytes as u32)
+        };
+        let _ = source;
+        if result == 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+    }
+    #[cfg(not(windows))] {
+        let _ = file;
+        fs::rename(source, destination)
+    }
+}
 fn cross_device(error: &io::Error) -> bool {
     #[cfg(windows)] { error.raw_os_error() == Some(17) }
     #[cfg(not(windows))] { error.kind() == io::ErrorKind::CrossesDevices }
@@ -198,6 +221,55 @@ pub fn move_file_cancellable(source: &Path, directory: &Path, age: u64, cancel: 
     }
     Err(MoveError::Failed("Too many filename conflicts".into()))
 }
+
+/// Copy a stable source file into a directory, updating an existing destination
+/// only when its content differs. The source is never removed.
+pub fn copy_file(source: &Path, directory: &Path, age: u64) -> Result<(PathBuf, &'static str), String> {
+    copy_file_cancellable(source, directory, age, &AtomicBool::new(false)).map_err(|e| e.to_string())
+}
+
+pub fn copy_file_cancellable(source: &Path, directory: &Path, age: u64, cancel: &AtomicBool) -> Result<(PathBuf, &'static str), MoveError> {
+    check_cancel(cancel)?;
+    let mut input = locked_read(source, false)?;
+    let before = input.metadata()?;
+    if !before.is_file() || !stable(&before, age) { return Err(MoveError::Failed("File is too recent or unstable".into())); }
+    fs::create_dir_all(directory)?;
+    let source_real = fs::canonicalize(source)?;
+    let dir_real = fs::canonicalize(directory)?;
+    if source_real.parent() == Some(dir_real.as_path()) { return Ok((source_real, "unchanged")); }
+    let filename = source.file_name().ok_or_else(|| MoveError::Failed("Invalid filename".into()))?;
+    let destination = dir_real.join(filename);
+    if let Ok(meta) = fs::symlink_metadata(&destination) {
+        if meta.is_file() && !meta.file_type().is_symlink() && meta.len() == before.len() {
+            let mut existing = locked_read(&destination, false)?;
+            if digest(&mut input, cancel)? == digest(&mut existing, cancel)? { return Ok((destination, "unchanged")); }
+        }
+    } else if let Err(error) = fs::symlink_metadata(&destination) {
+        if error.kind() != io::ErrorKind::NotFound { return Err(error.into()); }
+    }
+    check_cancel(cancel)?;
+    let temp = dir_real.join(format!(".filemelon-{}.tmp", uuid_suffix(source)));
+    let mut options = OpenOptions::new();
+    options.write(true).read(true).create_new(true);
+    #[cfg(windows)] options.share_mode(0);
+    let mut output = options.open(&temp)?;
+    let result = copy_verified(&mut input, &mut output, cancel).and_then(|()| {
+        drop(output);
+        let replacement = locked_read(&temp, true)?;
+        rename_locked_replace(&replacement, &temp, &destination)
+    });
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temp);
+        return Err(error.into());
+    }
+    Ok((destination, "copied"))
+}
+
+fn uuid_suffix(source: &Path) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    format!("{}-{}", std::process::id(), nanos ^ source.to_string_lossy().len() as u128)
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,6 +307,16 @@ mod tests {
         let mut input=File::open(&source).unwrap(); let mut output=File::options().read(true).write(true).create_new(true).open(&dest).unwrap();
         let error=copy_verified(&mut input,&mut output,&AtomicBool::new(true)).unwrap_err(); assert_eq!(error.kind(),io::ErrorKind::Interrupted); assert_eq!(output.metadata().unwrap().len(),0);
         copy_verified(&mut input,&mut output,&AtomicBool::new(false)).unwrap(); drop(output); assert_eq!(fs::read(source).unwrap(),fs::read(dest).unwrap());
+    }
+    #[test] fn copy_syncs_new_changed_and_unchanged_files_without_removing_source() {
+        let temp = tempfile::tempdir().unwrap(); let source = temp.path().join("source.txt"); let dest = temp.path().join("out");
+        aged_file(&source, b"first");
+        let (path, kind) = copy_file(&source, &dest, 0).unwrap();
+        assert_eq!(kind, "copied"); assert_eq!(fs::read(&path).unwrap(), b"first"); assert!(source.exists());
+        assert_eq!(copy_file(&source, &dest, 0).unwrap().1, "unchanged");
+        aged_file(&source, b"second");
+        assert_eq!(copy_file(&source, &dest, 0).unwrap().1, "copied");
+        assert_eq!(fs::read(&path).unwrap(), b"second"); assert!(source.exists());
     }
 }
 

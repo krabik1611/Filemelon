@@ -22,9 +22,10 @@ export interface Rule {
     condition: Condition;
     cron: string;
     enabled: boolean;
-    action: 'MOVE' | 'SORT' | 'DELETE';
+    action: 'MOVE' | 'COPY' | 'SORT' | 'DELETE';
     destination: string;
     min_age_seconds: number;
+    include_subdirectories: boolean;
 }
 export interface Run {
     id: number;

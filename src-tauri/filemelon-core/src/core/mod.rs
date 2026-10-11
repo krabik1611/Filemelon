@@ -5,7 +5,7 @@ pub mod scheduler;
 mod log;
 use crate::repository::Repository;
 use model::{Action, Rule, RuleRun, timestamp};
-use std::{collections::{HashMap, HashSet}, fs, path::PathBuf, sync::{Arc, Mutex as StdMutex, atomic::{AtomicBool, Ordering}}, time::SystemTime};
+use std::{collections::{HashMap, HashSet}, fs, path::{Path, PathBuf}, sync::{Arc, Mutex as StdMutex, atomic::{AtomicBool, Ordering}}, time::SystemTime};
 use tokio::sync::Mutex;
 
 #[derive(Clone, serde::Serialize)]
@@ -72,20 +72,23 @@ impl Core {
             if snapshots.is_none() {
                 let rules = all.to_vec(); let due = ids.to_vec(); let token = cancel.clone();
                 let captured = tokio::task::spawn_blocking(move || {
-                    let mut roots = HashMap::new(); let mut sources = HashMap::new(); let mut snapshots = HashMap::new();
+                     let mut roots = HashMap::new(); let mut sources = HashMap::new(); let mut snapshots = HashMap::new();
                     for rule in rules.iter().filter(|r| r.enabled) {
                         if token.load(Ordering::Acquire) { break; }
                         roots.insert(rule.id.unwrap(), fs::canonicalize(&rule.source).map_err(|e| e.to_string()));
                         if !due.contains(&rule.id.unwrap()) { continue; }
-                        let paths = sources.entry(rule.source.clone()).or_insert_with(|| {
-                            let mut paths = Vec::new();
-                            for entry in fs::read_dir(&rule.source).map_err(|e| e.to_string())? {
-                                if token.load(Ordering::Acquire) { break; }
-                                let entry = entry.map_err(|e| e.to_string())?;
-                                if entry.file_type().map_err(|e| e.to_string())?.is_file() { paths.push(entry.path()); }
-                            }
-                            Ok::<_, String>(Arc::new(paths))
-                        });
+                         let key = (rule.source.clone(), rule.include_subdirectories);
+                         let paths = sources.entry(key).or_insert_with(|| {
+                             let mut paths = Vec::new(); let mut pending = vec![PathBuf::from(&rule.source)];
+                             while let Some(directory) = pending.pop() {
+                                 for entry in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+                                     if token.load(Ordering::Acquire) { break; }
+                                     let entry = entry.map_err(|e| e.to_string())?; let kind = entry.file_type().map_err(|e| e.to_string())?;
+                                     if kind.is_file() { paths.push(entry.path()); } else if rule.include_subdirectories && kind.is_dir() { pending.push(entry.path()); }
+                                 }
+                             }
+                             Ok::<_, String>(Arc::new(paths))
+                         });
                         snapshots.insert(rule.id.unwrap(), paths.clone());
                     }
                     (roots, snapshots)
@@ -104,13 +107,17 @@ impl Core {
                         for path in paths.iter() {
                             if cancel.load(Ordering::Acquire) { break; }
                             let meta = match fs::symlink_metadata(path) { Ok(m) if m.is_file() && !m.file_type().is_symlink() => m, _ => { skipped += 1; continue; } };
-                            let canonical = root.join(path.file_name().ok_or("Invalid source filename")?);
+                            // Canonicalize each file before deriving its relative location. The
+                            // scan path can contain a symlink or a non-canonical source spelling,
+                            // while `root` is canonicalized above.
+                            let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.clone());
                             if claimed.contains(&canonical) { skipped += 1; continue; }
                             // Resolve each source once per batch rather than once per file per rule.
                             let owner = all.iter().filter(|r| r.enabled).find(|r| roots.get(&r.id.unwrap()).and_then(|p| p.as_ref().ok()) == Some(&root) && r.condition.matches(path, &meta, SystemTime::now()));
                             if owner.and_then(|r| r.id) != rule.id || !files::stable(&meta, rule.min_age_seconds) { skipped += 1; continue; }
-                            claimed.insert(canonical);
-                            let destination = if rule.action == Action::Sort { template::render(&rule.destination, path, &meta) } else { Ok(rule.destination.clone()) };
+                            claimed.insert(canonical.clone());
+                            let relative_parent = if rule.include_subdirectories { canonical.parent().and_then(|parent| parent.strip_prefix(&root).ok()).unwrap_or_else(|| Path::new("")) } else { Path::new("") };
+                            let destination = if rule.action == Action::Sort { template::render(&rule.destination, path, &meta).map(|dir| PathBuf::from(dir).join(relative_parent).to_string_lossy().into_owned()) } else { Ok(PathBuf::from(&rule.destination).join(relative_parent).to_string_lossy().into_owned()) };
                             let result = if rule.action == Action::Delete {
                                 if let Err(e) = self.log(serde_json::json!({"time":timestamp(),"run_id":run_id,"rule_id":rule.id,"action":rule.action,"source":path,"status":"intent","destination":null})) { failed += 1; errors.push(format!("Logging intent failed: {e}")); break; }
                                 let source = path.clone();
@@ -120,7 +127,8 @@ impl Core {
                                 Ok(dir) => {
                                     if let Err(e) = self.log(serde_json::json!({"time":timestamp(),"run_id":run_id,"rule_id":rule.id,"action":rule.action,"source":path,"directory":dir,"status":"intent"})) { failed += 1; errors.push(format!("Logging intent failed: {e}")); break; }
                                     let age = rule.min_age_seconds; let source = path.clone(); let token = cancel.clone();
-                                    tokio::task::spawn_blocking(move || files::move_file_cancellable(&source, &PathBuf::from(dir), age, &token)).await.map_err(|e| files::MoveError::Failed(e.to_string())).and_then(|result| result)
+                                    let copy = rule.action == Action::Copy;
+                                    tokio::task::spawn_blocking(move || if copy { files::copy_file_cancellable(&source, &PathBuf::from(dir), age, &token) } else { files::move_file_cancellable(&source, &PathBuf::from(dir), age, &token) }).await.map_err(|e| files::MoveError::Failed(e.to_string())).and_then(|result| result)
                                 }
                                 Err(e) => Err(files::MoveError::Failed(e)),
                             }};
@@ -147,7 +155,7 @@ mod integration_tests {
     use model::{Action, Condition, Rule};
     use std::{fs::File, time::Duration};
     fn rule(source: &std::path::Path, destination: &std::path::Path) -> Rule {
-        Rule { id:None,name:"Images".into(),source:source.to_string_lossy().into(),condition:Condition::Extension{values:vec!["txt".into()]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:destination.to_string_lossy().into(),min_age_seconds:0 }
+        Rule { id:None,name:"Images".into(),source:source.to_string_lossy().into(),condition:Condition::Extension{values:vec!["txt".into()]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:destination.to_string_lossy().into(),min_age_seconds:0,include_subdirectories:false }
     }
     #[tokio::test]
     async fn migrations_roundtrip_priority_and_history() {
@@ -190,7 +198,7 @@ mod cancellation_tests {
     #[tokio::test]
     async fn stop_ignores_execution_gate_and_rejects_stale_run_ids() {
         let temp = tempfile::tempdir().unwrap(); let core = Core::open(temp.path().join("data")).await.unwrap();
-        let rule = Rule {id:Some(7),name:"test".into(),source:String::new(),condition:model::Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:String::new(),min_age_seconds:0};
+        let rule = Rule {id:Some(7),name:"test".into(),source:String::new(),condition:model::Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:String::new(),min_age_seconds:0,include_subdirectories:false};
         let token=Arc::new(AtomicBool::new(false));
         let guard=core.activate(11,&rule,token.clone());
         let _gate=core.gate.lock().await;

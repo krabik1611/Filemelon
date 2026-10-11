@@ -11,8 +11,8 @@ impl RulesRepository {
         rows.iter().map(|r| Ok(Rule {
             id: Some(r.get("id")), name: r.get("name"), source: r.get("source"), cron: r.get("cron"), enabled: r.get::<i64,_>("enabled") != 0,
             condition: serde_json::from_str(r.get::<&str,_>("expr")).map_err(|e| format!("Rule {} has unsupported legacy conditions; migrate expr to JSON: {e}", r.get::<i64,_>("id")))?,
-            action: match r.try_get::<i64,_>("action_type").map_err(|_| "Missing action")? { 0 => Action::Move, 1 => Action::Sort, 2 => Action::Delete, _ => return Err("Unsupported action type".into()) },
-            destination: r.try_get("destination_template").map_err(|e| e.to_string())?, min_age_seconds: r.get::<i64,_>("min_age_seconds") as u64,
+            action: match r.try_get::<i64,_>("action_type").map_err(|_| "Missing action")? { 0 => Action::Move, 1 => Action::Sort, 2 => Action::Delete, 3 => Action::Copy, _ => return Err("Unsupported action type".into()) },
+            destination: r.try_get("destination_template").map_err(|e| e.to_string())?, min_age_seconds: r.get::<i64,_>("min_age_seconds") as u64, include_subdirectories: r.get::<i64,_>("include_subdirectories") != 0,
         })).collect()
     }
     pub async fn save(&self, rule: &Rule) -> Result<i64, String> {
@@ -20,14 +20,14 @@ impl RulesRepository {
         let mut tx = self.pool.begin().await.map_err(|e| e.to_string())?;
         let expr = serde_json::to_string(&rule.condition).map_err(|e| e.to_string())?;
         let id = if let Some(id) = rule.id {
-            let result = sqlx::query("UPDATE rules SET name=?,source=?,expr=?,cron=?,enabled=?,min_age_seconds=? WHERE id=?").bind(&rule.name).bind(&rule.source).bind(&expr).bind(&rule.cron).bind(rule.enabled).bind(rule.min_age_seconds as i64).bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            let result = sqlx::query("UPDATE rules SET name=?,source=?,expr=?,cron=?,enabled=?,min_age_seconds=?,include_subdirectories=? WHERE id=?").bind(&rule.name).bind(&rule.source).bind(&expr).bind(&rule.cron).bind(rule.enabled).bind(rule.min_age_seconds as i64).bind(rule.include_subdirectories).bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?;
             if result.rows_affected() != 1 { return Err("Rule not found".into()); }
             sqlx::query("DELETE FROM rule_actions WHERE rule_id=?").bind(id).execute(&mut *tx).await.map_err(|e| e.to_string())?; id
         } else {
             let order: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order),0)+1 FROM rules").fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-            sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds,sort_order) VALUES(?,?,?,?,?,?,?)").bind(&rule.name).bind(&rule.source).bind(&expr).bind(&rule.cron).bind(rule.enabled).bind(rule.min_age_seconds as i64).bind(order).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid()
+            sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds,include_subdirectories,sort_order) VALUES(?,?,?,?,?,?,?,?)").bind(&rule.name).bind(&rule.source).bind(&expr).bind(&rule.cron).bind(rule.enabled).bind(rule.min_age_seconds as i64).bind(rule.include_subdirectories).bind(order).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid()
         };
-        sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(match rule.action { Action::Move=>0, Action::Sort=>1, Action::Delete=>2 }).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+        sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(match rule.action { Action::Move=>0, Action::Sort=>1, Action::Delete=>2, Action::Copy=>3 }).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         tx.commit().await.map_err(|e| e.to_string())?; Ok(id)
     }
     pub async fn delete_disabled(&self, id: i64) -> Result<(), String> {
@@ -66,7 +66,7 @@ mod deletion_tests {
     async fn deletion_requires_disabled_rule_and_cascades_related_rows() {
         let temp = tempfile::tempdir().unwrap();
         let repository = crate::repository::Repository::open(&temp.path().join("data")).await.unwrap();
-        let rule = Rule {id:None,name:"Deletion test".into(),source:temp.path().to_string_lossy().into(),condition:Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:temp.path().join("out").to_string_lossy().into(),min_age_seconds:0};
+        let rule = Rule {id:None,name:"Deletion test".into(),source:temp.path().to_string_lossy().into(),condition:Condition::All{conditions:vec![]},cron:"0 * * * *".into(),enabled:true,action:Action::Move,destination:temp.path().join("out").to_string_lossy().into(),min_age_seconds:0,include_subdirectories:false};
         let id = repository.rules.save(&rule).await.unwrap();
         sqlx::query("INSERT INTO rule_runs(rule_id,rule_name,trigger,start_time,status) VALUES(?,'Deletion test','manual','2026-10-07T00:00:00Z','success')").bind(id).execute(&repository.pool).await.unwrap();
         assert!(repository.rules.delete_disabled(id).await.is_err());

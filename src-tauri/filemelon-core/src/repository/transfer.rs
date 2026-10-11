@@ -25,8 +25,8 @@ impl RulesRepository {
         for rule in &bundle.rules {
             let expr = serde_json::to_string(&rule.condition).map_err(|e| e.to_string())?;
             let order: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order),0)+1 FROM rules").fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-            let id = sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds,sort_order) VALUES(?,?,?,?,0,?,?)").bind(&rule.name).bind(&rule.source).bind(expr).bind(&rule.cron).bind(rule.min_age_seconds as i64).bind(order).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid();
-            sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(match rule.action { Action::Move=>0, Action::Sort=>1, Action::Delete=>2 }).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
+            let id = sqlx::query("INSERT INTO rules(name,source,expr,cron,enabled,min_age_seconds,include_subdirectories,sort_order) VALUES(?,?,?,?,0,?,?,?)").bind(&rule.name).bind(&rule.source).bind(expr).bind(&rule.cron).bind(rule.min_age_seconds as i64).bind(rule.include_subdirectories).bind(order).execute(&mut *tx).await.map_err(|e| e.to_string())?.last_insert_rowid();
+            sqlx::query("INSERT INTO rule_actions(rule_id,action_type,destination_template) VALUES(?,?,?)").bind(id).bind(match rule.action { Action::Move=>0, Action::Sort=>1, Action::Delete=>2, Action::Copy=>3 }).bind(&rule.destination).execute(&mut *tx).await.map_err(|e| e.to_string())?;
         }
         tx.commit().await.map_err(|e| e.to_string())?;
         Ok(ImportResult {imported:bundle.rules.len()})
@@ -39,7 +39,7 @@ mod tests {
     #[tokio::test]
     async fn export_import_appends_disabled_rules_and_rejects_invalid_batch() {
         let temp=tempfile::tempdir().unwrap(); let repository=Repository::open(&temp.path().join("data")).await.unwrap();
-        let rule=Rule {id:None,name:"Roundtrip".into(),source:temp.path().to_string_lossy().into(),condition:Condition::Extension{values:vec!["mp4".into()]},cron:"*/5 * * * *".into(),enabled:true,action:Action::Sort,destination:std::env::current_dir().unwrap().join("Sorted/{year}").to_string_lossy().into(),min_age_seconds:60};
+            let rule=Rule {id:None,name:"Roundtrip".into(),source:temp.path().to_string_lossy().into(),condition:Condition::Extension{values:vec!["mp4".into()]},cron:"*/5 * * * *".into(),enabled:true,action:Action::Sort,destination:std::env::current_dir().unwrap().join("Sorted/{year}").to_string_lossy().into(),min_age_seconds:60,include_subdirectories:false};
         repository.rules.save(&rule).await.unwrap();
         let json=repository.rules.export_json().await.unwrap();
         let mut bundle:RuleBundle=serde_json::from_str(&json).unwrap(); assert!(bundle.rules[0].id.is_none());

@@ -43,13 +43,14 @@ impl Condition {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum Action { Move, Sort, Delete }
+pub enum Action { Move, Copy, Sort, Delete }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
     pub id: Option<i64>, pub name: String, pub source: String, pub condition: Condition,
     pub cron: String, pub enabled: bool, pub action: Action, pub destination: String,
     pub min_age_seconds: u64,
+    #[serde(default)] pub include_subdirectories: bool,
 }
 pub fn schedule(expr: &str) -> Result<cron::Schedule, String> {
     let parts: Vec<_> = expr.split_whitespace().collect();

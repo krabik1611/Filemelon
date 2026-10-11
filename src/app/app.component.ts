@@ -211,7 +211,7 @@ export class AppComponent implements OnInit, OnDestroy {
     createdAge: number | null = null;
     private unlisten?: UnlistenFn;
     empty(): Rule {
-        return { id: null, name: '', source: '', condition: { type: 'all', conditions: [] }, cron: '0 * * * *', enabled: true, action: 'MOVE', destination: '', min_age_seconds: 86400 };
+        return { id: null, name: '', source: '', condition: { type: 'all', conditions: [] }, cron: '0 * * * *', enabled: true, action: 'MOVE', destination: '', min_age_seconds: 86400, include_subdirectories: false };
     }
     async ngOnInit() {
         if (!isTauri()) {

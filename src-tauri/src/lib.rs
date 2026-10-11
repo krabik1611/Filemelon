@@ -130,18 +130,17 @@ pub fn run() {
             let event_core = core.clone();
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut previous = String::new();
                 loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::time::sleep(Duration::from_millis(250)).await;
                     let snapshot = match async {
                         let rules = event_core.repository.rules.list().await?;
                         let history = event_core.repository.history().await?;
                         let next = event_core.next_runs().await?;
                         Ok::<_, String>(UiSnapshot { rules, history, next, active: event_core.active_run() })
                     }.await { Ok(value) => value, Err(_) => continue };
-                    let encoded = match serde_json::to_string(&snapshot) { Ok(value) => value, Err(_) => continue };
-                    if encoded == previous { continue; }
-                    previous = encoded;
+                    // The active run is held outside SQLite and can change while the
+                    // long-running command is in progress, so publish snapshots on
+                    // every tick instead of deduplicating only persisted state.
                     let _ = app_handle.emit("filemelon-state-changed", &snapshot);
                 }
             });
