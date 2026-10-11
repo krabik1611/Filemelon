@@ -64,11 +64,14 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy -p filemelon-core --all-targets --locked -- -D warnings
       - name: Import Windows signing certificate
-        if: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PASSWORD != '' && secrets.WINDOWS_CERTIFICATE_THUMBPRINT != '' }}
         env:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE) -or [string]::IsNullOrWhiteSpace($env:WINDOWS_CERTIFICATE_PASSWORD)) {
+            Write-Host 'Windows signing certificate secrets are not configured; building unsigned artifacts.'
+            exit 0
+          }
           New-Item -ItemType Directory -Path certificate | Out-Null
           Set-Content -LiteralPath certificate/certificate.txt -Value $env:WINDOWS_CERTIFICATE
           certutil -decode certificate/certificate.txt certificate/certificate.pfx

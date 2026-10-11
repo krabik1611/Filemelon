@@ -17,7 +17,7 @@ try {
     $buildArgs = @('run', 'tauri', '--', 'build', '--target', $target)
     if ($Mode -eq 'portable') { $buildArgs += '--no-bundle' }
     else { $buildArgs += @('--bundles', 'nsis') }
-    if ($env:WINDOWS_CERTIFICATE_THUMBPRINT) {
+    if ($env:WINDOWS_CERTIFICATE -and $env:WINDOWS_CERTIFICATE_PASSWORD -and $env:WINDOWS_CERTIFICATE_THUMBPRINT) {
         $signedConfig = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
         $signedConfig.bundle.windows.certificateThumbprint = $env:WINDOWS_CERTIFICATE_THUMBPRINT
         $signedConfig.bundle.windows.digestAlgorithm = if ($env:WINDOWS_CERTIFICATE_DIGEST) { $env:WINDOWS_CERTIFICATE_DIGEST } else { 'sha256' }
