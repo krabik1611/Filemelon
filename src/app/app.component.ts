@@ -237,6 +237,10 @@ export class AppComponent implements OnInit, OnDestroy {
             this.autostart.set(await invoke<boolean>('autostart_enabled'));
         });
         this.unlisten = await listen<UiSnapshot>('filemelon-state-changed', event => this.applySnapshot(event.payload));
+        if (!this.error()) {
+            // Report readiness only after Angular renders and the initial IPC calls succeed.
+            requestAnimationFrame(() => requestAnimationFrame(() => { void invoke('startup_ready'); }));
+        }
     }
     ngOnDestroy() {
         this.unlisten?.();

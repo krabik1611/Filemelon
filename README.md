@@ -13,6 +13,8 @@ Choose one of these files in GitHub Releases:
 
 Users do not need Node.js or Rust. The portable and installed versions share settings; only one instance runs at a time. After moving the portable file, disable and re-enable Windows autostart from the new location.
 
+If the application opens and closes immediately, install or repair the Microsoft Edge WebView2 Runtime and start it again. The desktop process now records startup failures in `%APPDATA%\com.krabby.filemelon\startup.log`; the installer and portable build are also checked in CI with a startup smoke test.
+
 ## Usage
 
 1. Create a rule and choose a source folder.
@@ -126,7 +128,7 @@ After a successful build, the workflow creates a GitHub Release and attaches the
 
 ## Current limitations
 
-Windows x64 is supported. The UI editor supports one condition group; nested groups are supported by the core and JSON format but cannot be edited in the form. There is no automatic application update, automatic cleanup of history or logs, or release signing. Before public distribution, test installation, tray/autostart, and file transfers on a normal Windows machine.
+Windows x64 is supported. The UI editor supports one condition group; nested groups are supported by the core and JSON format but cannot be edited in the form. There is no automatic application update or automatic cleanup of history or logs. Release signing requires configuring a code-signing certificate or a cloud signing service in GitHub Actions. Before public distribution, test installation, tray/autostart, and file transfers on a normal Windows machine.
 
 ### Rule management
 

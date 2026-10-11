@@ -1,4 +1,5 @@
 pub use filemelon_core::{core, repository};
+mod startup;
 use crate::core::{Core, model::{Rule, RuleRun}};
 use std::sync::Arc;
 use tauri::{Emitter, Manager, State, menu::{Menu, MenuItem}, tray::TrayIconBuilder};
@@ -11,7 +12,15 @@ fn native_file_dialog(app: &tauri::AppHandle) -> tauri_plugin_dialog::FileDialog
     if let Some(window) = app.get_webview_window("main") { dialog = dialog.set_parent(&window); }
     dialog
 }
-struct AppState { core: Arc<Core> }
+struct AppState { core: Arc<Core>, smoke_dir: Option<std::path::PathBuf> }
+#[tauri::command]
+fn startup_ready(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(directory) = &state.smoke_dir {
+        std::fs::write(directory.join("ready"), "Frontend and database ready").map_err(|e| e.to_string())?;
+        app.exit(0);
+    }
+    Ok(())
+}
 #[derive(Serialize)]
 struct UiSnapshot { rules: Vec<Rule>, history: Vec<RuleRun>, next: Vec<core::scheduler::NextRun>, active: Option<core::ActiveRunStatus> }
 #[tauri::command]
@@ -98,17 +107,29 @@ async fn import_rules(app: tauri::AppHandle, state: State<'_, AppState>) -> Resu
 }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+    std::panic::set_hook(Box::new(|info| startup::report(&info.to_string())));
+    let smoke_dir = std::env::var_os("FILEMELON_SMOKE_DIR").map(std::path::PathBuf::from);
+    let mut builder = tauri::Builder::default();
+    // CI uses a fresh database and must not focus or execute rules in a user's instance.
+    if smoke_dir.is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
             if let Some(window) = app.get_webview_window("main") { let _ = window.show(); let _ = window.set_focus(); }
-        }))
+        }));
+    }
+    let result = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--background"])))
-        .invoke_handler(tauri::generate_handler![list_rules,next_runs,export_rules,import_rules,pick_directory,save_rule,delete_rule,set_rule_enabled,set_all_rules_enabled,reorder_rules,run_now,run_history,active_run,stop_run,autostart_enabled,set_autostart])
-        .setup(|app| {
-            let data_dir = app.path().app_data_dir()?;
+        .invoke_handler(tauri::generate_handler![startup_ready,list_rules,next_runs,export_rules,import_rules,pick_directory,save_rule,delete_rule,set_rule_enabled,set_all_rules_enabled,reorder_rules,run_now,run_history,active_run,stop_run,autostart_enabled,set_autostart])
+        .setup(move |app| {
+            let data_dir = match &smoke_dir { Some(path) => path.join("data"), None => app.path().app_data_dir()? };
             let core = tauri::async_runtime::block_on(Core::open(data_dir)).map_err(std::io::Error::other)?;
-            app.manage(AppState { core: core.clone() });
+            app.manage(AppState { core: core.clone(), smoke_dir: smoke_dir.clone() });
+            if smoke_dir.is_some() {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.hide()?;
+                }
+                return Ok(());
+            }
             let show = MenuItem::with_id(app, "show", "Open Filemelon", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Exit Filemelon", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &quit])?;
@@ -147,8 +168,11 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| { if let tauri::WindowEvent::CloseRequested { api, .. } = event { api.prevent_close(); let _ = window.hide(); } })
-        .run(tauri::generate_context!())
-        .expect("error while running Filemelon");
+        .run(tauri::generate_context!());
+    if let Err(error) = result {
+        crate::startup::report(&error.to_string());
+        std::process::exit(1);
+    }
 }
 
 

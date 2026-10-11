@@ -8,6 +8,7 @@ $targetDir = Join-Path $projectRoot 'src-tauri\target'
 $binaryDir = Join-Path $targetDir "$target\release"
 $outputDir = Join-Path $projectRoot "release\$version-windows-x64"
 $previousTargetDir = $env:CARGO_TARGET_DIR
+$temporaryConfig = $null
 Push-Location $projectRoot
 try {
     & node (Join-Path $PSScriptRoot 'check-release.cjs')
@@ -16,6 +17,15 @@ try {
     $buildArgs = @('run', 'tauri', '--', 'build', '--target', $target)
     if ($Mode -eq 'portable') { $buildArgs += '--no-bundle' }
     else { $buildArgs += @('--bundles', 'nsis') }
+    if ($env:WINDOWS_CERTIFICATE_THUMBPRINT) {
+        $signedConfig = $config | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $signedConfig.bundle.windows.certificateThumbprint = $env:WINDOWS_CERTIFICATE_THUMBPRINT
+        $signedConfig.bundle.windows.digestAlgorithm = if ($env:WINDOWS_CERTIFICATE_DIGEST) { $env:WINDOWS_CERTIFICATE_DIGEST } else { 'sha256' }
+        $signedConfig.bundle.windows.timestampUrl = if ($env:WINDOWS_CERTIFICATE_TIMESTAMP_URL) { $env:WINDOWS_CERTIFICATE_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
+        $temporaryConfig = Join-Path $projectRoot 'src-tauri\tauri.signing.conf.json'
+        $signedConfig | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $temporaryConfig -Encoding utf8
+        $buildArgs += @('--config', $temporaryConfig)
+    }
     $buildArgs += @('--', '--locked')
     & npm.cmd @buildArgs
     if ($LASTEXITCODE -ne 0) { throw "Production build failed (exit code $LASTEXITCODE). No release files were published." }
@@ -23,6 +33,8 @@ try {
     $portableSource = Join-Path $binaryDir 'filemelon.exe'
     & node (Join-Path $PSScriptRoot 'check-exe-icon.cjs') $portableSource
     if ($LASTEXITCODE -ne 0) { throw 'Executable icon verification failed. No release files were published.' }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'check-startup.ps1') -Executable $portableSource
+    if ($LASTEXITCODE -ne 0) { throw 'Executable startup smoke check failed. No release files were published.' }
     $installerSources = @()
     if ($Mode -ne 'portable') {
         $installerSources = @(Get-ChildItem -LiteralPath (Join-Path $binaryDir 'bundle\nsis') -File | Where-Object { $_.Name -like "filemelon_${version}_*-setup.exe" })
@@ -59,6 +71,7 @@ public static class FilemelonShellNotify {
     & node (Join-Path $PSScriptRoot 'write-checksums.cjs') $outputDir
     if ($LASTEXITCODE -ne 0) { throw 'Release checksum generation failed.' }
 } finally {
+    if ($temporaryConfig) { Remove-Item -LiteralPath $temporaryConfig -Force -ErrorAction SilentlyContinue }
     $env:CARGO_TARGET_DIR = $previousTargetDir
     Pop-Location
 }

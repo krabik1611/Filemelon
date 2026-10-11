@@ -63,7 +63,23 @@ jobs:
       - name: Lint Rust core
         working-directory: src-tauri
         run: cargo clippy -p filemelon-core --all-targets --locked -- -D warnings
+      - name: Import Windows signing certificate
+        if: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PASSWORD != '' && secrets.WINDOWS_CERTIFICATE_THUMBPRINT != '' }}
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory -Path certificate | Out-Null
+          Set-Content -LiteralPath certificate/certificate.txt -Value $env:WINDOWS_CERTIFICATE
+          certutil -decode certificate/certificate.txt certificate/certificate.pfx
+          Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText) | Out-Null
       - name: Build installer and portable
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_CERTIFICATE_THUMBPRINT: ${{ secrets.WINDOWS_CERTIFICATE_THUMBPRINT }}
+          WINDOWS_CERTIFICATE_DIGEST: ${{ secrets.WINDOWS_CERTIFICATE_DIGEST }}
+          WINDOWS_CERTIFICATE_TIMESTAMP_URL: ${{ secrets.WINDOWS_CERTIFICATE_TIMESTAMP_URL }}
         run: npm run build:prod
       - uses: actions/upload-artifact@v4
         with:

@@ -16,3 +16,6 @@ All notable changes to Filemelon are documented here.
 ### Changed
 
 - Updated application and core package versions to `0.1.3`.
+- Added a Windows startup smoke test to the release build so broken packaged applications fail in CI before publication.
+- Startup failures are written to `startup.log` and shown in a Windows error dialog instead of failing silently.
+- GitHub Actions can sign releases when Windows certificate secrets are configured; unsigned builds remain supported when those secrets are absent.
